@@ -715,7 +715,7 @@ peft==0.16.0
     #   lm-eval
 perceptron==0.1.4
     # via -r requirements/test.in
-pillow==10.4.0
+pillow==12.1.1
     # via
     #   genai-perf
     #   imageio
