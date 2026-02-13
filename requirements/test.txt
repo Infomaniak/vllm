@@ -1075,7 +1075,7 @@ sqlalchemy==2.0.41
     #   mlflow
 sqlitedict==2.1.0
     # via lm-eval
-sqlparse==0.5.3
+sqlparse==0.5.4
     # via mlflow-skinny
 starlette==0.46.2
     # via
