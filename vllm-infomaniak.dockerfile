@@ -1,7 +1,29 @@
+# syntax=docker/dockerfile:1.4
 FROM vllm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47
 
-# Install curl if not already available
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-RUN curl -o /usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/gdn_attn.py \
-    https://raw.githubusercontent.com/Infomaniak/vllm/f9ed45ab7d4c6ddcf4e1f0e404a0b8adfd4707de/vllm/v1/attention/backends/gdn_attn.py
+# ---------- BUILD AND RUN TEST ----------
+# docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47 .
+# docker run -it --entrypoint=/bin/bash -p 8000:8000 registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47
+# vllm serve --config debug.yaml
+# ----------------------
+# Overlay our forked Python sources on top of the pre-built vllm install.
+#
+# The base image already contains a fully-built vllm at
+#   /usr/local/lib/python3.12/dist-packages/vllm
+# including all compiled C/CUDA extensions (_C.abi3.so, _moe_C.abi3.so,
+# vllm_flash_attn/*.so, cumem_allocator.abi3.so, ...).
+#
+# We only want to replace the Python source files, NOT the compiled
+# extensions (rebuilding them would require the full toolchain and defeat
+# the purpose of starting from the pre-built image).
+#
+# .dockerignore strips **/*.so, **/*.pyd, **/__pycache__, build/, dist/,
+# .venv/, etc. from the build context, so this COPY only brings in .py
+# (and other source) files. The pre-built .so files already in the image
+# are left untouched.
+#
+# Note: COPY overlays — it does not delete files from the destination that
+# are missing in the source. That's what we want here: the compiled
+# extensions stay in place.
+COPY vllm/ /usr/local/lib/python3.12/dist-packages/vllm/
+COPY debug.yaml /vllm-workspace/debug.yaml

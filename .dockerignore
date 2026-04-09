@@ -1,12 +1,18 @@
 /.venv
 /build
 dist
-vllm/*.so
+
+# Locally-built C/CUDA extensions — must NOT shadow the pre-built ones
+# baked into the vllm/vllm-openai base image.
+**/*.so
+**/*.pyd
+**/*.dylib
+**/*.dll
 
 # Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
 
 .mypy_cache
 
