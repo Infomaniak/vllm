@@ -1,0 +1,46 @@
+# vLLM Configuration File
+model: Qwen/Qwen3.5-0.8B
+port: 8000
+tensor_parallel_size: 1
+dtype: auto
+gpu_memory_utilization: 0.85
+max_model_len: 2024
+
+# Features & Optimization
+language_model_only: true
+enable_auto_tool_choice: true
+enable_chunked_prefill: true
+enable_prefix_caching: true
+async_scheduling: true
+
+# Parsing Logic
+tool_call_parser: qwen3_coder
+reasoning_parser: qwen3
+
+# Speculative Decoding Configuration
+speculative_config:
+  method: mtp
+  num_speculative_tokens: 2
+
+## ==========================================
+## Debug & Fast Startup Settings
+## ==========================================
+#
+## 1. Startup Speed Optimizations
+#optimization_level: 0           # Trades performance for the fastest possible startup time (-O0)
+#enforce_eager: true             # Forces eager execution, bypassing slow CUDA graph capture
+#skip_mm_profiling: true         # Skips multimodal memory profiling during engine init
+#
+### 2. Debugging & Observability
+##enable_log_requests: true       # Logs Prompt inputs, Request IDs, and parameters (requires DEBUG level)
+##log_error_stack: true           # Prints full stack traces on errors
+##uvicorn_log_level: debug        # Sets the FastAPI/Uvicorn frontend to verbose mode
+##disable_log_stats: false        # Keeps continuous engine iteration statistics enabled
+##
+### 3. Compilation Config (Corrected from 'cc')
+### Note: enforce_eager already disables CUDA graphs, but we explicitly pass this
+### to override backend and graph compilers just in case.
+##compilation_config:
+##  mode: null
+##  cudagraph_mode: null
+##  backend: eager

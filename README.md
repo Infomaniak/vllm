@@ -82,6 +82,14 @@ Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
 We welcome and value any contributions and collaborations.
 Please check out [Contributing to vLLM](https://docs.vllm.ai/en/latest/contributing/index.html) for how to get involved.
 
+### Quick Launch dev server
+
+Build dev docker image:
+
+````bash
+docker build -t vllm-dev-infomaniak:latest -f vllm-dev-infomaniak.dockerfile .
+````
+
 ## Citation
 
 If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs/2309.06180):

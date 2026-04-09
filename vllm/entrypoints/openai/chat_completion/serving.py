@@ -558,7 +558,7 @@ class OpenAIServingChat(OpenAIServing):
 
         # Prepare the tool parser if it's needed
         try:
-            if tool_choice_auto and self.tool_parser:
+            if (tool_choice_auto or tool_choice_function_name) and self.tool_parser:
                 if tokenizer is None:
                     raise ValueError(
                         "Tokenizer not available when `skip_tokenizer_init=True`"
@@ -809,44 +809,102 @@ class OpenAIServingChat(OpenAIServing):
                                 else:
                                     current_text = ""
                         else:
-                            # Just to add remaining `content`
-                            if reasoning_parser:
-                                delta_text = previous_text + delta_text
-                                current_text = ""
-
-                            if function_name_returned[i]:
-                                delta_tool_call = DeltaToolCall(
-                                    function=DeltaFunctionCall(arguments=delta_text),
-                                    index=i,
-                                )
-                            else:
-                                # Generate ID based on tokenizer type
-                                if is_mistral_tokenizer(tokenizer):
-                                    tool_call_id = MistralToolCall.generate_random_id()
-                                else:
-                                    tool_call_id = make_tool_call_id(
-                                        id_type=self.tool_call_id_type,
-                                        func_name=tool_choice_function_name,
-                                        idx=history_tool_call_cnt,
-                                    )
-                                delta_tool_call = DeltaToolCall(
-                                    id=tool_call_id,
-                                    type="function",
-                                    function=DeltaFunctionCall(
-                                        name=tool_choice_function_name,
-                                        arguments=delta_text,
-                                    ),
-                                    index=i,
-                                )
-                                function_name_returned[i] = True
-                                history_tool_call_cnt += 1
-
-                            delta_message = DeltaMessage(
-                                tool_calls=[
-                                    delta_tool_call,
-                                ]
+                            # Thinking models output structured tool
+                            # call markup instead of raw JSON args;
+                            # use tool parser if available.
+                            use_tool_parser = (
+                                    tool_parser is not None
+                                    and reasoning_parser is not None
                             )
-                            tools_streamed[i] = True
+                            if use_tool_parser:
+                                try:
+                                    delta_token_ids = as_list(
+                                            output.token_ids
+                                            )
+                                    if not added_content_delta_arr[i]:
+                                        added_content_delta_arr[i] = True
+                                        previous_text = ""
+                                        previous_token_ids = []
+                                        delta_text = current_text
+                                        delta_token_ids = (
+                                            current_token_ids)
+
+                                    delta_message = (
+                                        tool_parser
+                                        .extract_tool_calls_streaming(
+                                                previous_text=(
+                                                    previous_text),
+                                                current_text=current_text,
+                                                delta_text=delta_text,
+                                                previous_token_ids=(
+                                                    previous_token_ids),
+                                                current_token_ids=(
+                                                    current_token_ids),
+                                                delta_token_ids=(
+                                                    delta_token_ids),
+                                                request=request,
+                                                )
+                                    )
+                                    if (delta_message
+                                            and delta_message.tool_calls):
+                                        tools_streamed[i] = True
+                                except Exception:
+                                    logger.warning(
+                                            "Tool parser failed for "
+                                            "forced tool choice in "
+                                            "streaming, falling back "
+                                            "to raw delta."
+                                            )
+                                    use_tool_parser = False
+
+                            if not use_tool_parser:
+                                # Non-thinking or tool parser failed:
+                                # stream raw deltas as arguments
+                                if reasoning_parser:
+                                    delta_text = (previous_text
+                                                  + delta_text)
+                                    current_text = ""
+
+                                if function_name_returned[i]:
+                                    delta_tool_call = DeltaToolCall(
+                                            function=DeltaFunctionCall(
+                                                    arguments=delta_text
+                                                    ),
+                                            index=i,
+                                            )
+                                else:
+                                    # Generate ID based on tokenizer type
+                                    if is_mistral_tokenizer(tokenizer):
+                                        tool_call_id = (
+                                            MistralToolCall
+                                            .generate_random_id())
+                                    else:
+                                        tool_call_id = make_tool_call_id(
+                                                id_type=(
+                                                    self.tool_call_id_type),
+                                                func_name=(
+                                                    tool_choice_function_name),
+                                                idx=history_tool_call_cnt,
+                                                )
+                                    delta_tool_call = DeltaToolCall(
+                                            id=tool_call_id,
+                                            type="function",
+                                            function=DeltaFunctionCall(
+                                                    name=(
+                                                        tool_choice_function_name),
+                                                    arguments=delta_text,
+                                                    ),
+                                            index=i,
+                                            )
+                                    function_name_returned[i] = True
+                                    history_tool_call_cnt += 1
+
+                                delta_message = DeltaMessage(
+                                        tool_calls=[
+                                            delta_tool_call,
+                                            ]
+                                        )
+                                tools_streamed[i] = True
 
                     elif request.tool_choice == "required":
                         assert previous_texts is not None

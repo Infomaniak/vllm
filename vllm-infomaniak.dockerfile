@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:nightly-36735fd77224467e6580f3bd48eb32d4fca8c72e
+FROM vllm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47
 
 # Install curl if not already available
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
