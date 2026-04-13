@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.4
-FROM vllm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47
+FROM vllm/vllm-openai:cu130-nightly-9dd5ee0117be1b891d1ddc4e5cd7d03071ec11ae
 
 # ---------- BUILD AND RUN TEST ----------
-# docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47 .
-# docker run -it --entrypoint=/bin/bash -p 8000:8000 registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-2488d1dca2df05059fcfbad0a1612ef2a5202b47
+# docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-9dd5ee0117be1b891d1ddc4e5cd7d03071ec11ae .
+# docker run -it --entrypoint=/bin/bash -p 8000:8000 registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-9dd5ee0117be1b891d1ddc4e5cd7d03071ec11ae
 # vllm serve --config debug.yaml
 # ----------------------
 # Overlay our forked Python sources on top of the pre-built vllm install.

@@ -27,18 +27,18 @@ DEFAULT_REGISTRY = "registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai"
 DOCKERFILES = [
     "vllm-infomaniak.dockerfile",
     "vllm-dev-infomaniak.dockerfile",
-]
+    ]
 
 
 # --- Utility Functions ---
 def print_color(text: str, color: str) -> None:
     """Print colored text using ANSI codes."""
     colors = {
-        "cyan": "\033[36m",
+        "cyan":   "\033[36m",
         "yellow": "\033[33m",
-        "green": "\033[32m",
-        "red": "\033[31m",
-    }
+        "green":  "\033[32m",
+        "red":    "\033[31m",
+        }
     reset = "\033[0m"
     print(f"{colors.get(color, '')}{text}{reset}", file=sys.stderr)
 
@@ -46,8 +46,8 @@ def print_color(text: str, color: str) -> None:
 def run_git(args: list[str], check: bool = True) -> str:
     """Run a git command and return its output."""
     result = subprocess.run(
-        ["git"] + args, capture_output=True, text=True, check=False
-    )
+            ["git"] + args, capture_output=True, text=True, check=False
+            )
     if check and result.returncode != 0:
         print_color(f"Git command failed: git {' '.join(args)}", "red")
         if result.stderr:
@@ -76,9 +76,9 @@ def get_branch_info(remote: str, branch: str) -> tuple[int, int]:
     """Get commit count ahead/behind relative to upstream."""
     try:
         ahead_behind = run_git(
-            ["rev-list", "--left-right", f"{remote}/{branch}...HEAD", "--count"],
-            check=False
-        )
+                ["rev-list", "--left-right", f"{remote}/{branch}...HEAD", "--count"],
+                check=False
+                )
         if ahead_behind:
             parts = ahead_behind.strip().split()
             if len(parts) == 2:
@@ -91,29 +91,28 @@ def get_branch_info(remote: str, branch: str) -> tuple[int, int]:
 def sync_fork(remote: str, branch: str) -> None:
     """Sync the local branch with upstream."""
     print_color(f"=== Syncing fork with {remote}/{branch} ===", "cyan")
-    
+
     check_upstream(remote)
-    
+
     print_color(f"Step 1: Fetching {remote} changes...", "yellow")
     run_git(["fetch", remote])
-    
+
     ahead, behind = get_branch_info(remote, branch)
     print_color(f"Status: {ahead} ahead, {behind} behind {remote}/{branch}", "yellow")
-    
+
     if behind == 0:
         print_color("✓ Branch is already up to date with upstream.", "green")
         return
 
     print_color(f"Step 2: Checking out {branch}...", "yellow")
     run_git(["checkout", branch])
-    
-    check_git_identity()
+
     print_color(f"Step 3: Merging {remote}/{branch}...", "yellow")
     run_git(["merge", f"{remote}/{branch}", "--no-edit"])
-    
+
     print_color(f"Step 4: Pushing to origin/{branch}...", "yellow")
     run_git(["push", "origin", branch])
-    
+
     print_color("✓ Sync completed successfully.", "green")
 
 
@@ -144,7 +143,7 @@ def fetch_tag_shas(variant: str, max_pages: int = 5) -> dict[str, str]:
 def detect_base_image(variant: str, remote: str, branch: str, max_walk: int) -> tuple[str, str]:
     """Find the best base image tag matching the merge-base."""
     print_color(f"=== Detecting best base image for {variant} ===", "cyan")
-    
+
     merge_base = run_git(["merge-base", "HEAD", f"{remote}/{branch}"])
     print(f"Merge-base with {remote}/{branch}: {merge_base}", file=sys.stderr)
 
@@ -168,20 +167,20 @@ def update_dockerfiles(variant: str, sha: str) -> None:
     """Update tag references in all configured Dockerfiles."""
     prefix = f"{variant}-nightly-" if variant else "nightly-"
     pattern = re.compile(rf"({re.escape(prefix)})[0-9a-f]{{40}}")
-    
+
     for df_name in DOCKERFILES:
         df_path = Path(df_name)
         if not df_path.exists():
             print_color(f"Warning: {df_name} not found, skipping.", "yellow")
             continue
-            
+
         text = df_path.read_text()
         new_text, n = pattern.subn(rf"\g<1>{sha}", text)
-        
+
         if n == 0:
             print_color(f"Warning: No {prefix}<sha> found in {df_name}.", "yellow")
             continue
-            
+
         if new_text != text:
             df_path.write_text(new_text)
             print_color(f"✓ Updated {df_name}: {n} occurrence(s) -> {prefix}{sha}", "green")
@@ -205,17 +204,17 @@ def main() -> None:
     p.add_argument("--remote", default="upstream", help="Upstream remote name (default: upstream)")
     p.add_argument("--branch", default="main", help="Target branch (default: main)")
     p.add_argument("--skip-sync", action="store_true", help="Skip syncing with upstream")
-    
+
     # Detection args
     p.add_argument("--variant", default="cu130", help="Image variant prefix (default: cu130)")
     p.add_argument("--max-walk", type=int, default=200, help="Max commits to walk back (default: 200)")
     p.add_argument("--no-update", action="store_true", help="Don't update Dockerfiles")
-    
+
     # Build args
     p.add_argument("--build", action="store_true", help="Build docker images after update")
     p.add_argument("--push", action="store_true", help="Push docker images after build")
     p.add_argument("--registry", default=DEFAULT_REGISTRY, help=f"Image registry (default: {DEFAULT_REGISTRY})")
-    
+
     args = p.parse_args()
 
     # 1. Sync
@@ -241,6 +240,7 @@ def main() -> None:
             if "dev" in df:
                 image_name += "-dev"
             docker_build_and_push(image_name, df, args.push)
+
 
 if __name__ == "__main__":
     main()
