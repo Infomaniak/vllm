@@ -25,8 +25,7 @@ DOCKER_REPO = "vllm/vllm-openai"
 TAGS_URL = f"https://hub.docker.com/v2/repositories/{DOCKER_REPO}/tags/"
 DEFAULT_REGISTRY = "registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai"
 DOCKERFILES = [
-    "vllm-infomaniak.dockerfile",
-    "vllm-dev-infomaniak.dockerfile",
+    "vllm-infomaniak.dockerfile", "vllm-dev-infomaniak.dockerfile",
     ]
 
 
@@ -34,10 +33,7 @@ DOCKERFILES = [
 def print_color(text: str, color: str) -> None:
     """Print colored text using ANSI codes."""
     colors = {
-        "cyan":   "\033[36m",
-        "yellow": "\033[33m",
-        "green":  "\033[32m",
-        "red":    "\033[31m",
+        "cyan": "\033[36m", "yellow": "\033[33m", "green": "\033[32m", "red": "\033[31m",
         }
     reset = "\033[0m"
     print(f"{colors.get(color, '')}{text}{reset}", file=sys.stderr)
@@ -76,8 +72,7 @@ def get_branch_info(remote: str, branch: str) -> tuple[int, int]:
     """Get commit count ahead/behind relative to upstream."""
     try:
         ahead_behind = run_git(
-                ["rev-list", "--left-right", f"{remote}/{branch}...HEAD", "--count"],
-                check=False
+                ["rev-list", "--left-right", f"{remote}/{branch}...HEAD", "--count"], check=False
                 )
         if ahead_behind:
             parts = ahead_behind.strip().split()
@@ -241,27 +236,6 @@ def main() -> None:
                 image_name += "-dev"
             docker_build_and_push(image_name, df, args.push)
 
-
-if __name__ == "__main__":
-    main()
-
-    sha, tag = detect_base_image(args.variant, args.remote, args.branch, args.max_walk)
-    print(f"Target Tag: {tag}")
-    print()
-
-    # 3. Update
-    if not args.no_update:
-        update_dockerfiles(args.variant, sha)
-        print()
-
-    # 4. Build / Push
-    if args.build or args.push:
-        for df in DOCKERFILES:
-            # For simplicity, we use the same tag for our images as the base image
-            image_name = f"{args.registry}:{tag}"
-            if "dev" in df:
-                image_name += "-dev"
-            docker_build_and_push(image_name, df, args.push)
 
 if __name__ == "__main__":
     main()
