@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM vllm/vllm-openai:cu130-nightly-9dd5ee0117be1b891d1ddc4e5cd7d03071ec11ae
+FROM vllm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48
 
 # curl for debugging; python3-tk if you need matplotlib; git because
 # editable install often pulls version info from git.
