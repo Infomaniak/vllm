@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM vllm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48
+FROM vllm/vllm-openai:v0.20.0-ubuntu2404
 
 # ---------- BUILD AND RUN TEST ----------
 # docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48 .

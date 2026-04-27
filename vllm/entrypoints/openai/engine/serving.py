@@ -627,10 +627,34 @@ class OpenAIServing:
             and isinstance(request.tool_choice, ToolChoiceFunction)
         ):
             assert content is not None
-            # Forced Function Call (Responses API)
-            function_calls.append(
-                FunctionCall(name=request.tool_choice.name, arguments=content)
-            )
+            forced_name = request.tool_choice.name
+            # Forced Function Call — thinking models may output structured
+            # tool call markup instead of raw JSON arguments; use the tool
+            # parser if available to extract proper arguments.
+            tool_added = False
+            if tool_parser_cls and tokenizer is not None:
+                try:
+                    tp = tool_parser_cls(tokenizer, request.tools)
+                    info = tp.extract_tool_calls(
+                        content, request=request)  # type: ignore[arg-type]
+                    if info.tools_called and info.tool_calls:
+                        for tc in info.tool_calls:
+                            if tc.function.name == forced_name:
+                                function_calls.append(
+                                    FunctionCall(
+                                        name=forced_name,
+                                        arguments=tc.function.arguments,
+                                        id=tc.id,
+                                    )
+                                )
+                                tool_added = True
+                except Exception:
+                    pass
+            # Fallback if parsing wasn't needed or failed.
+            if not tool_added:
+                function_calls.append(
+                    FunctionCall(name=forced_name, arguments=content)
+                )
             content = None  # Clear content since tool is called.
         elif (
             not use_mistral_tool_parser
@@ -640,9 +664,32 @@ class OpenAIServing:
         ):
             # Named function with standard JSON-based parsing
             assert content is not None
-            function_calls.append(
-                FunctionCall(name=request.tool_choice.function.name, arguments=content)
-            )
+            forced_name = request.tool_choice.function.name
+            # Forced Function Call — same logic as above.
+            tool_added = False
+            if tool_parser_cls and tokenizer is not None:
+                try:
+                    tp = tool_parser_cls(tokenizer, request.tools)
+                    info = tp.extract_tool_calls(
+                        content, request=request)  # type: ignore[arg-type]
+                    if info.tools_called and info.tool_calls:
+                        for tc in info.tool_calls:
+                            if tc.function.name == forced_name:
+                                function_calls.append(
+                                    FunctionCall(
+                                        name=forced_name,
+                                        arguments=tc.function.arguments,
+                                        id=tc.id,
+                                    )
+                                )
+                                tool_added = True
+                except Exception:
+                    pass
+            # Fallback if parsing wasn't needed or failed.
+            if not tool_added:
+                function_calls.append(
+                    FunctionCall(name=forced_name, arguments=content)
+                )
             content = None  # Clear content since tool is called.
         elif (
             not use_mistral_tool_parser

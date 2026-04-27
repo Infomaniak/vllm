@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM vllm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48
+FROM vllm/vllm-openai:v0.20.0-ubuntu2404
 
 # curl for debugging; python3-tk if you need matplotlib; git because
 # editable install often pulls version info from git.
@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential \
   ninja-build \
 && rm -rf /var/lib/apt/lists/*
+
+
+RUN python3 -m pip install -U pytest pytest-asyncio tblib transformers
 
 # === PyCharm remote-debug shim ==============================================
 # PyCharm bind-mounts the host project at /opt/project and prepends it to

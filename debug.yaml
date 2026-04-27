@@ -31,16 +31,16 @@ speculative_config:
 #enforce_eager: true             # Forces eager execution, bypassing slow CUDA graph capture
 #skip_mm_profiling: true         # Skips multimodal memory profiling during engine init
 #
-### 2. Debugging & Observability
-##enable_log_requests: true       # Logs Prompt inputs, Request IDs, and parameters (requires DEBUG level)
-##log_error_stack: true           # Prints full stack traces on errors
-##uvicorn_log_level: debug        # Sets the FastAPI/Uvicorn frontend to verbose mode
-##disable_log_stats: false        # Keeps continuous engine iteration statistics enabled
-##
-### 3. Compilation Config (Corrected from 'cc')
-### Note: enforce_eager already disables CUDA graphs, but we explicitly pass this
-### to override backend and graph compilers just in case.
-##compilation_config:
-##  mode: null
-##  cudagraph_mode: null
-##  backend: eager
+## 2. Debugging & Observability
+#enable_log_requests: true       # Logs Prompt inputs, Request IDs, and parameters (requires DEBUG level)
+#log_error_stack: true           # Prints full stack traces on errors
+#uvicorn_log_level: debug        # Sets the FastAPI/Uvicorn frontend to verbose mode
+#disable_log_stats: false        # Keeps continuous engine iteration statistics enabled
+#
+## 3. Compilation Config (Corrected from 'cc')
+## Note: enforce_eager already disables CUDA graphs, but we explicitly pass this
+## to override backend and graph compilers just in case.
+#compilation_config:
+#  mode: null
+#  cudagraph_mode: null
+#  backend: eager
