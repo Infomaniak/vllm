@@ -1,9 +1,8 @@
-# syntax=docker/dockerfile:1.4
 FROM vllm/vllm-openai:v0.20.0-ubuntu2404
 
 # ---------- BUILD AND RUN TEST ----------
-# docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48 .
-# docker run -it --entrypoint=/bin/bash -p 8000:8000 registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-8936118134d0547fa1cc78adab2d03edd6d3dc48
+# docker build -f vllm-infomaniak.dockerfile -t registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-fe9c3d6c5f66c873d196800384ed6880687b9e52 .
+# docker run -it --entrypoint=/bin/bash -p 8000:8000 registry.infomaniak.com:443/r-and-d/ai/k8s-llm/vllm-openai:cu130-nightly-fe9c3d6c5f66c873d196800384ed6880687b9e52
 # vllm serve --config debug.yaml
 # ----------------------
 # Overlay our forked Python sources on top of the pre-built vllm install.
@@ -26,4 +25,5 @@ FROM vllm/vllm-openai:v0.20.0-ubuntu2404
 # are missing in the source. That's what we want here: the compiled
 # extensions stay in place.
 COPY vllm/ /usr/local/lib/python3.12/dist-packages/vllm/
+COPY examples/ /vllm-workspace/examples/
 COPY debug.yaml /vllm-workspace/debug.yaml
