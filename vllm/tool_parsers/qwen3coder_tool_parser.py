@@ -31,8 +31,6 @@ logger = init_logger(__name__)
 
 
 class Qwen3CoderToolParser(ToolParser):
-    supports_required_and_named = False
-
     def __init__(self, tokenizer: TokenizerLike, tools: list[Tool] | None = None):
         super().__init__(tokenizer, tools)
 
@@ -88,24 +86,6 @@ class Qwen3CoderToolParser(ToolParser):
         logger.debug(
             "vLLM Successfully import tool parser %s !", self.__class__.__name__
         )
-
-    def adjust_request(
-        self, request: ChatCompletionRequest | "ResponsesRequest"
-    ) -> ChatCompletionRequest | "ResponsesRequest":
-        from vllm.entrypoints.openai.chat_completion.protocol import (
-            ChatCompletionNamedToolChoiceParam,
-        )
-
-        if request.tools:
-            tc = request.tool_choice
-            if tc == "required" or isinstance(tc, ChatCompletionNamedToolChoiceParam):
-                if request.tool_choice != "none":
-                    request.skip_special_tokens = False
-                return request
-        request = super().adjust_request(request)
-        if request.tools and request.tool_choice != "none":
-            request.skip_special_tokens = False
-        return request
 
     def _generate_tool_call_id(self) -> str:
         """Generate a unique tool call ID."""
