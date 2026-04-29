@@ -12,6 +12,8 @@ enable_auto_tool_choice: true
 enable_chunked_prefill: true
 enable_prefix_caching: true
 async_scheduling: true
+max_num_seqs: 4
+max_num_batched_tokens: 1012
 
 # Parsing Logic
 tool_call_parser: qwen3_coder
