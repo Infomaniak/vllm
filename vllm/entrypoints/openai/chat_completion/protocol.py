@@ -30,6 +30,8 @@ from vllm.entrypoints.openai.engine.protocol import (
     StructuralTagResponseFormat,
     ToolCall,
     UsageInfo,
+    validate_structural_tag_response_format,
+    validate_structured_outputs_structural_tag,
 )
 from vllm.exceptions import VLLMValidationError
 from vllm.logger import init_logger
@@ -63,6 +65,13 @@ class ChatMessage(OpenAIBaseModel):
 
     # vLLM-specific fields that are not in OpenAI spec
     reasoning: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if len(data.get("tool_calls", [])) == 0:
+            data.pop("tool_calls", None)
+        return data
 
 
 class ChatCompletionLogProb(OpenAIBaseModel):
@@ -373,6 +382,21 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "need to map generated text back to input tokens."
         ),
     )
+    return_token_offsets: bool | None = Field(
+        default=False,
+        description=(
+            "If true, return char-level (start, end) offsets for each "
+            "token relative to the tokenized source string in the "
+            "`token_offsets` field of the rendered response. Only "
+            "supported on the `/v1/completions/render` and "
+            "`/v1/chat/completions/render` endpoints; ignored on regular "
+            "generation endpoints. Honored only for Fast (Rust-backed) "
+            "tokenizers; otherwise `token_offsets` is null. For chat "
+            "requests, offsets are relative to the templated prompt "
+            "string (after applying the chat template). Multimodal "
+            "inputs and pre-tokenized inputs always yield null."
+        ),
+    )
     return_prompt_text: bool | None = Field(
         default=None,
         description=(
@@ -380,6 +404,18 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "prompt string produced by chat templating. In streaming mode it "
             "is sent only on the first chunk. This is useful for inspecting "
             "exactly what was fed into the model."
+        ),
+    )
+
+    return_assistant_tokens_mask: bool = Field(
+        default=False,
+        description=(
+            "If true, the /render response will include an "
+            "``assistant_tokens_mask`` field — a per-token list of 0/1 "
+            "values indicating which tokens were assistant-generated. "
+            "Requires the chat template to use ``{% generation %}`` "
+            "tags.  When the template does not support it, "
+            "``assistant_tokens_mask`` will be ``null``."
         ),
     )
 
@@ -496,6 +532,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
                 extra_kwargs,
             ),
             media_io_kwargs=self.media_io_kwargs,
+            return_assistant_tokens_mask=bool(self.return_assistant_tokens_mask),
         )
 
     def build_tok_params(self, model_config: ModelConfig) -> TokenizeParams:
@@ -515,6 +552,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             needs_detokenization=bool(self.echo and not self.return_token_ids),
             max_total_tokens_param="max_model_len",
             max_output_tokens_param=max_output_tokens_param,
+            return_token_offsets=bool(self.return_token_offsets),
         )
 
     # Default sampling parameters for chat completion requests
@@ -671,6 +709,9 @@ class ChatCompletionRequest(OpenAIBaseModel):
                     parameter="response_format",
                 )
 
+        if rf_type == "structural_tag":
+            validate_structural_tag_response_format(response_format)
+
         return data
 
     @model_validator(mode="before")
@@ -754,6 +795,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
                 "You can only either use constraints for structured outputs "
                 "or tools, not both.",
             )
+        validate_structured_outputs_structural_tag(structured_outputs_kwargs)
         return data
 
     @model_validator(mode="before")
@@ -949,6 +991,8 @@ class BatchChatCompletionRequest(OpenAIBaseModel):
     temperature: float | None = 0.7
     top_p: float | None = 1.0
     user: str | None = None
+    tool_choice: Literal["none"] | None = "none"
+    include_reasoning: bool = True
 
     # vLLM extensions
     best_of: int | None = None
@@ -979,6 +1023,16 @@ class BatchChatCompletionRequest(OpenAIBaseModel):
                 "Batch chat completions do not support beam search. "
                 "Please set `use_beam_search` to False."
             )
+        response_format = data.get("response_format")
+        rf_type = (
+            response_format.get("type")
+            if isinstance(response_format, dict)
+            else getattr(response_format, "type", None)
+        )
+        if rf_type == "structural_tag":
+            validate_structural_tag_response_format(response_format)
+        if (structured_outputs := data.get("structured_outputs")) is not None:
+            validate_structured_outputs_structural_tag(structured_outputs)
         n = data.get("n", 1)
         if n is not None and n != 1:
             raise ValueError(
