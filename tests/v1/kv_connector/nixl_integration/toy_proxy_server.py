@@ -3,12 +3,13 @@
 
 import argparse
 import asyncio
+import collections
 import copy
 import functools
 import itertools
 import logging
 import os
-import sys
+import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
@@ -22,10 +23,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 # 1. Logging Configuration
 # ==============================================================================
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S", )
 logger = logging.getLogger("vllm-proxy")
 
 # Mute httpx default logging to avoid clutter
@@ -44,6 +42,70 @@ HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=15.0, pool=10.0)
 HTTP_LIMITS = httpx.Limits(max_connections=2000, max_keepalive_connections=500)
 
 
+# ==============================================================================
+# 3. Metrics Configuration & Tracker
+# ==============================================================================
+class ProxyMetrics:
+    """Zero-dependency Prometheus metrics generator for basic proxy telemetry."""
+
+    def __init__(self) -> None:
+        self.requests_total: Dict[Tuple[str, str], int] = collections.defaultdict(int)
+        self.prefill_total: Dict[str, int] = collections.defaultdict(int)
+        self.decode_total: Dict[str, int] = collections.defaultdict(int)
+        self.request_duration_sum: Dict[str, float] = collections.defaultdict(float)
+        self.request_duration_count: Dict[str, int] = collections.defaultdict(int)
+
+    def record_request(self, endpoint: str, status: int, duration_sec: float) -> None:
+        self.requests_total[(endpoint, str(status))] += 1
+        self.request_duration_sum[endpoint] += duration_sec
+        self.request_duration_count[endpoint] += 1
+
+    def record_prefill(self, status: int) -> None:
+        self.prefill_total[str(status)] += 1
+
+    def record_decode(self, status: int) -> None:
+        self.decode_total[str(status)] += 1
+
+    def generate_prometheus(self) -> str:
+        lines: List[str] = [
+            "# HELP vllm_proxy_requests_total Total HTTP requests processed by endpoint and status.",
+            "# TYPE vllm_proxy_requests_total counter",
+            ]
+        for (endpoint, status), count in sorted(self.requests_total.items()):
+            lines.append(f'vllm_proxy_requests_total{{endpoint="{endpoint}",status="{status}"}} {count}')
+
+        lines.extend(
+                [
+                    "# HELP vllm_proxy_prefill_requests_total Total prefill attempts by status.",
+                    "# TYPE vllm_proxy_prefill_requests_total counter",
+                    ], )
+        for status, count in sorted(self.prefill_total.items()):
+            lines.append(f'vllm_proxy_prefill_requests_total{{status="{status}"}} {count}')
+
+        lines.extend(
+                [
+                    "# HELP vllm_proxy_decode_requests_total Total decode connection attempts by status.",
+                    "# TYPE vllm_proxy_decode_requests_total counter",
+                    ], )
+        for status, count in sorted(self.decode_total.items()):
+            lines.append(f'vllm_proxy_decode_requests_total{{status="{status}"}} {count}')
+
+        lines.extend(
+                [
+                    "# HELP vllm_proxy_request_duration_seconds Summary of request processing duration in seconds.",
+                    "# TYPE vllm_proxy_request_duration_seconds summary",
+                    ], )
+        for endpoint, duration_sum in sorted(self.request_duration_sum.items()):
+            count = self.request_duration_count[endpoint]
+            lines.append(f'vllm_proxy_request_duration_seconds_sum{{endpoint="{endpoint}"}} {duration_sum:.6f}')
+            lines.append(f'vllm_proxy_request_duration_seconds_count{{endpoint="{endpoint}"}} {count}')
+
+        return "\n".join(lines) + "\n"
+
+
+metrics = ProxyMetrics()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="vLLM Disaggregated Router Proxy")
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
@@ -51,29 +113,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=int(os.getenv("WORKERS", "4")))
 
     parser.add_argument(
-        "--prefiller-hosts",
-        type=str,
-        nargs="+",
-        default=os.getenv("PREFILLER_HOSTS", "localhost").split(","),
-    )
+            "--prefiller-hosts", type=str, nargs="+", default=os.getenv("PREFILLER_HOSTS", "localhost").split(","), )
     parser.add_argument(
-        "--prefiller-ports",
-        type=int,
-        nargs="+",
-        default=[int(p) for p in os.getenv("PREFILLER_PORTS", "8100").split(",")],
-    )
+            "--prefiller-ports", type=int, nargs="+",
+            default=[int(p) for p in os.getenv("PREFILLER_PORTS", "8100").split(",")], )
     parser.add_argument(
-        "--decoder-hosts",
-        type=str,
-        nargs="+",
-        default=os.getenv("DECODER_HOSTS", "localhost").split(","),
-    )
+            "--decoder-hosts", type=str, nargs="+", default=os.getenv("DECODER_HOSTS", "localhost").split(","), )
     parser.add_argument(
-        "--decoder-ports",
-        type=int,
-        nargs="+",
-        default=[int(p) for p in os.getenv("DECODER_PORTS", "8200").split(",")],
-    )
+            "--decoder-ports", type=int, nargs="+",
+            default=[int(p) for p in os.getenv("DECODER_PORTS", "8200").split(",")], )
 
     args, _ = parser.parse_known_args()
 
@@ -103,41 +151,35 @@ async def lifespan(app: FastAPI):
     for i, (host, port) in enumerate(args.prefiller_instances):
         prefiller_base_url = f"http://{host}:{port}"
         app.state.prefill_clients.append(
-            {
-                "client": httpx.AsyncClient(
-                    timeout=HTTP_TIMEOUT,
-                    limits=HTTP_LIMITS,
-                    base_url=prefiller_base_url,
-                ),
-                "host": host,
-                "port": port,
-                "id": f"prefill-{i}-{host}:{port}",
-            }
-        )
+                {
+                    "client":
+                        httpx.AsyncClient(
+                            timeout=HTTP_TIMEOUT, limits=HTTP_LIMITS, base_url=prefiller_base_url, ), "host": host,
+                    "port":                                                                                   port,
+                    "id":
+                        f"prefill-{i}-{host}:{port}",
+                    }, )
 
     # Create decode clients
     for i, (host, port) in enumerate(args.decoder_instances):
         decoder_base_url = f"http://{host}:{port}"
         app.state.decode_clients.append(
-            {
-                "client": httpx.AsyncClient(
-                    timeout=HTTP_TIMEOUT,
-                    limits=HTTP_LIMITS,
-                    base_url=decoder_base_url,
-                ),
-                "host": host,
-                "port": port,
-                "id": f"decode-{i}-{host}:{port}",
-            }
-        )
+                {
+                    "client":
+                        httpx.AsyncClient(
+                            timeout=HTTP_TIMEOUT, limits=HTTP_LIMITS, base_url=decoder_base_url, ), "host": host,
+                    "port":                                                                                 port,
+                    "id":
+                        f"decode-{i}-{host}:{port}",
+                    }, )
 
     # Initialize round-robin iterators
     app.state.prefill_iterator = itertools.cycle(range(len(app.state.prefill_clients)))
     app.state.decode_iterator = itertools.cycle(range(len(app.state.decode_clients)))
 
     logger.info(
-        f"Initialized {len(app.state.prefill_clients)} prefill clients and {len(app.state.decode_clients)} decode clients."
-    )
+            f"Initialized {len(app.state.prefill_clients)} prefill clients and {len(app.state.decode_clients)} decode "
+            f"clients.", )
     yield
 
     # Shutdown: Close all HTTP connections gracefully
@@ -159,19 +201,15 @@ def get_next_client(app: FastAPI, service_type: str) -> Dict[str, Any]:
 
 
 async def send_prefill_request_with_retries(
-    app: FastAPI, endpoint: str, original_req_data: dict, request_id: str, headers: dict
-) -> Tuple[int, Any, Optional[int], Optional[int], Optional[Dict[str, Any]]]:
+        app: FastAPI, endpoint: str, original_req_data: dict, request_id: str, headers: dict, ) -> Tuple[
+    int, Any, Optional[int], Optional[int], Optional[Dict[str, Any]]]:
     # Deep copy to avoid mutating the original request dict across retries
     payload = copy.deepcopy(original_req_data)
 
     payload["kv_transfer_params"] = {
-        "do_remote_decode": True,
-        "do_remote_prefill": False,
-        "remote_engine_id": None,
-        "remote_block_ids": None,
-        "remote_host": None,
-        "remote_port": None,
-    }
+        "do_remote_decode": True, "do_remote_prefill": False, "remote_engine_id": None, "remote_block_ids": None,
+        "remote_host":      None, "remote_port": None,
+        }
     payload["stream"] = False
     payload["max_tokens"] = 1
 
@@ -194,11 +232,13 @@ async def send_prefill_request_with_retries(
 
             # If client sent a bad request (4xx), return it immediately without retry.
             if 400 <= response.status_code < 500:
+                metrics.record_prefill(response.status_code)
                 logger.warning(f"[{request_id}] Prefill 4xx Error on {target_id}: {response.status_code}")
                 return response.status_code, response.content, None, None, None
 
             response.raise_for_status()
             response_json = response.json()
+            metrics.record_prefill(200)
 
             logger.info(f"[{request_id}] Prefill Success -> {target_id}")
             return 200, response_json, min_tokens, min_completion_tokens, client_info
@@ -216,8 +256,8 @@ async def send_prefill_request_with_retries(
 
 
 async def stream_decode_with_retries(
-    app: FastAPI, endpoint: str, req_data: dict, request_id: str, headers: dict
-) -> Tuple[int, Optional[bytes], Optional[httpx.Response]]:
+        app: FastAPI, endpoint: str, req_data: dict, request_id: str, headers: dict, ) -> Tuple[
+    int, Optional[bytes], Optional[httpx.Response]]:
     last_error: Optional[Exception] = None
     for attempt in range(1, MAX_RETRIES + 1):
         client_info = get_next_client(app, "decode")
@@ -232,9 +272,11 @@ async def stream_decode_with_retries(
             if not response.is_success:
                 error_content = await response.aread()
                 await response.aclose()
+                metrics.record_decode(response.status_code)
                 logger.warning(f"[{request_id}] Decode error {response.status_code} on {target_id}")
                 return response.status_code, error_content, None
 
+            metrics.record_decode(200)
             logger.info(f"[{request_id}] Decode connection established -> {target_id}")
             return 200, None, response
 
@@ -251,12 +293,14 @@ async def stream_decode_with_retries(
 
 
 async def _handle_completions(api: str, request: Request):
+    start_time = time.perf_counter()
     # Unique ID for tracing logs
     request_id = request.headers.get("X-Request-Id", str(uuid.uuid4())[:12])
 
     try:
         req_data = await request.json()
     except Exception:
+        metrics.record_request(api, 400, time.perf_counter() - start_time)
         return JSONResponse(status_code=400, content={"error": "Invalid JSON payload"})
 
     model = req_data.get("model", "unknown")
@@ -264,7 +308,7 @@ async def _handle_completions(api: str, request: Request):
 
     headers = {
         "X-Request-Id": request_id,
-    }
+        }
     if request.client and request.client.host:
         headers["X-Forwarded-For"] = request.client.host
 
@@ -273,11 +317,11 @@ async def _handle_completions(api: str, request: Request):
         # STEP 1: PREFILL PHASE
         # ==========================================
         p_status, p_data, min_t, min_comp_t, _ = await send_prefill_request_with_retries(
-            request.app, api, req_data, request_id, headers
-        )
+                request.app, api, req_data, request_id, headers, )
 
         # Fast exit if proxy received non-200 error
         if p_status != 200:
+            metrics.record_request(api, p_status, time.perf_counter() - start_time)
             return Response(status_code=p_status, content=p_data, media_type="application/json")
 
         # ==========================================
@@ -288,10 +332,10 @@ async def _handle_completions(api: str, request: Request):
         kv_transfer_params = p_data.get("kv_transfer_params") if isinstance(p_data, dict) else None
         if not kv_transfer_params:
             logger.error(f"[{request_id}] Prefill response missing required 'kv_transfer_params': {p_data}")
+            metrics.record_request(api, 502, time.perf_counter() - start_time)
             return JSONResponse(
-                status_code=502,
-                content={"error": {"message": "Prefill worker did not return kv_transfer_params"}},
-            )
+                    status_code=502,
+                    content={"error": {"message": "Prefill worker did not return kv_transfer_params"}}, )
 
         decode_req_data["kv_transfer_params"] = kv_transfer_params
 
@@ -304,10 +348,10 @@ async def _handle_completions(api: str, request: Request):
         # STEP 3: DECODE PHASE
         # ==========================================
         d_status, d_error, d_response = await stream_decode_with_retries(
-            request.app, api, decode_req_data, request_id, headers
-        )
+                request.app, api, decode_req_data, request_id, headers, )
 
         if d_status != 200 or d_response is None:
+            metrics.record_request(api, d_status, time.perf_counter() - start_time)
             return Response(status_code=d_status, content=d_error, media_type="application/json")
 
         # Generator to stream the response safely
@@ -322,14 +366,14 @@ async def _handle_completions(api: str, request: Request):
                 await d_response.aclose()
                 logger.debug(f"[{request_id}] Stream context closed.")
 
+        metrics.record_request(api, d_response.status_code, time.perf_counter() - start_time)
         return StreamingResponse(
-            generate_stream(),
-            media_type=d_response.headers.get("content-type", "application/json"),
-            status_code=d_response.status_code,
-        )
+                generate_stream(), media_type=d_response.headers.get("content-type", "application/json"),
+                status_code=d_response.status_code, )
 
     except Exception as e:
         logger.error(f"[{request_id}] Unhandled internal proxy error:\n{traceback.format_exc()}")
+        metrics.record_request(api, 500, time.perf_counter() - start_time)
         return JSONResponse(status_code=500, content={"error": {"message": "Internal Proxy Server Error"}})
 
 
@@ -379,10 +423,15 @@ async def get_models(request: Request):
 async def healthcheck():
     """Simple endpoint to check if the server is running."""
     return {
-        "status": "ok",
-        "prefill_instances": len(app.state.prefill_clients),
+        "status":           "ok", "prefill_instances": len(app.state.prefill_clients),
         "decode_instances": len(app.state.decode_clients),
-    }
+        }
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus-compatible metrics endpoint."""
+    return Response(content=metrics.generate_prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 if __name__ == "__main__":
@@ -401,9 +450,4 @@ if __name__ == "__main__":
 
     # Pass import string "toy_proxy_server:app" for multi-worker support in uvicorn
     uvicorn.run(
-        "toy_proxy_server:app",
-        host=args.host,
-        port=args.port,
-        workers=args.workers,
-        log_level="warning",
-    )
+            "toy_proxy_server:app", host=args.host, port=args.port, workers=args.workers, log_level="warning", )
