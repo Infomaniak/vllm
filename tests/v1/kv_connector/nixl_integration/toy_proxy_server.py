@@ -144,6 +144,10 @@ def get_args() -> argparse.Namespace:
 async def lifespan(app: FastAPI):
     """Lifespan context manager to handle startup and shutdown events."""
     args = get_args()
+    logger.info(
+            f"Startup args: host={args.host}, port={args.port}, workers={args.workers}, "
+            f"prefiller_instances={args.prefiller_instances}, decoder_instances={args.decoder_instances}"
+            )
     app.state.prefill_clients = []
     app.state.decode_clients = []
 
