@@ -4,6 +4,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from math import isqrt
+import re
 from typing import Annotated, Any, Literal
 
 import torch
@@ -408,7 +409,18 @@ class Apertus1p5ForConditionalGeneration(
             "model.language_model.": "language_model.",
             "model.vision_tokenizer.": "vision_tower.",
             "model.audio_tokenizer.": "audio_tower.",
-        }
+        },
+        orig_to_new_regex={
+            re.compile(
+                r"^(?:model\.vision_tokenizer\.|vision_tower\.)encoder\.down\.(\d+)\.block\.(\d+)\."
+            ): r"vision_tower.encoder.stages.\1.layers.\2.resnet.",
+            re.compile(
+                r"^(?:model\.vision_tokenizer\.|vision_tower\.)encoder\.down\.(\d+)\.attn\.(\d+)\."
+            ): r"vision_tower.encoder.stages.\1.layers.\2.attention.",
+            re.compile(
+                r"^(?:model\.vision_tokenizer\.|vision_tower\.)encoder\.down\.(\d+)\.downsample\."
+            ): r"vision_tower.encoder.stages.\1.downsample.",
+        },
     )
 
     packed_modules_mapping = ApertusForCausalLM.packed_modules_mapping
