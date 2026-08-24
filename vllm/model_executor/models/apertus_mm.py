@@ -18,6 +18,7 @@ from transformers import (
     AutoModel,
     BatchFeature,
     PretrainedConfig,
+    WavTokenizerEncoderModel,
 )
 from transformers.models.wavtokenizer import WavTokenizerFeatureExtractor
 
@@ -420,6 +421,9 @@ class Apertus1p5ForConditionalGeneration(
             re.compile(
                 r"^(?:model\.vision_tokenizer\.|vision_tower\.)encoder\.down\.(\d+)\.downsample\."
             ): r"vision_tower.encoder.stages.\1.downsample.",
+            re.compile(
+                r"^(?:model\.audio_tokenizer\.|audio_tower\.)encoder_model\."
+            ): r"audio_tower.",
         },
     )
 
@@ -499,6 +503,7 @@ class Apertus1p5ForConditionalGeneration(
                     )
                     self.audio_tower = _init_component_model(
                         audio_cfg,
+                        model_cls=WavTokenizerEncoderModel,
                     )
 
         self.image_token_offset = getattr(
