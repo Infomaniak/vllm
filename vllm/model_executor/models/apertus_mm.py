@@ -424,6 +424,12 @@ class Apertus1p5ForConditionalGeneration(
             re.compile(
                 r"^(?:model\.audio_tokenizer\.|audio_tower\.)encoder_model\."
             ): r"audio_tower.",
+            re.compile(
+                r"^(?:model\.audio_tokenizer\.|audio_tower\.)(?:backbone|head)\."
+            ): None,
+            re.compile(
+                r"^(?:model\.vision_tokenizer\.|vision_tower\.)(?:decoder|post_quant_conv)\."
+            ): None,
         },
     )
 
@@ -544,6 +550,12 @@ class Apertus1p5ForConditionalGeneration(
         weights: Iterable[tuple[str, torch.Tensor]],
     ) -> set[str]:
         skip_prefixes = ["lm_head."] if self.config.tie_word_embeddings else []
+        skip_prefixes.extend([
+            "audio_tower.backbone.",
+            "audio_tower.head.",
+            "vision_tower.decoder.",
+            "vision_tower.post_quant_conv.",
+        ])
         loader = AutoWeightsLoader(self, skip_prefixes=skip_prefixes)
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
