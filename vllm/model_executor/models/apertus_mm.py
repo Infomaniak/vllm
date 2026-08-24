@@ -107,11 +107,15 @@ def _pad_logits_to_input_vocab(
 
 
 def _init_component_model(
-    component_config: PretrainedConfig,
+    component_config: PretrainedConfig | dict,
     model_cls: type[torch.nn.Module] | None = None,
 ) -> torch.nn.Module:
-    config_dict = component_config.to_dict()
-    config = AutoConfig.for_model(config_dict.pop("model_type"), **config_dict)
+    if isinstance(component_config, PretrainedConfig):
+        config_dict = component_config.to_dict()
+    else:
+        config_dict = dict(component_config)
+    model_type = config_dict.pop("model_type")
+    config = AutoConfig.for_model(model_type, **config_dict)
     return AutoModel.from_config(config) if model_cls is None else model_cls(config)
 
 
@@ -470,13 +474,19 @@ class Apertus1p5ForConditionalGeneration(
         if get_pp_group().is_first_rank:
             with set_default_torch_dtype(torch.float32):
                 with self._mark_tower_model(vllm_config, "image"):
+                    vision_cfg = getattr(config, "vision_config", None) or getattr(
+                        config, "vision_tokenizer_config", None
+                    )
                     self.vision_tower = _init_component_model(
-                        config.vision_tokenizer_config,
+                        vision_cfg,
                         model_cls=Apertus1p5VisionTokenizerModel,
                     )
                 with self._mark_tower_model(vllm_config, "audio"):
+                    audio_cfg = getattr(config, "audio_config", None) or getattr(
+                        config, "audio_tokenizer_config", None
+                    )
                     self.audio_tower = _init_component_model(
-                        config.audio_tokenizer_config,
+                        audio_cfg,
                     )
 
         self.image_token_offset = getattr(
