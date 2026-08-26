@@ -400,7 +400,6 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
             with gr.Row():
                 btn_unfreeze_single = gr.Button("⚡ Emergency Unfreeze (Active Target)", variant="primary", scale=2)
                 btn_unfreeze_both = gr.Button("🔥 Full Reset (Selected Prefill + Decode)", variant="stop", scale=2)
-                btn_unfreeze_all_cluster = gr.Button("💥 Full Reset All Hosts in Cluster", variant="stop", scale=2)
 
             gr.Markdown("### 🧹 Granular Cache & Request Reset")
             with gr.Row():
@@ -483,8 +482,6 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
     # --- Bindings ---
     btn_unfreeze_single.click(emergency_unfreeze, inputs=[selected_url], outputs=[output_box])
     btn_unfreeze_both.click(unfreeze_both_fn, inputs=[prefill_dropdown, decode_dropdown], outputs=[output_box])
-    btn_unfreeze_all_cluster.click(unfreeze_all_cluster_fn, outputs=[output_box])
-
     btn_flush_cache.click(
         reset_prefix_cache_action,
         inputs=[selected_url, reset_running_chk, reset_external_chk],
