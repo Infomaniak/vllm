@@ -1,8 +1,21 @@
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
 import gradio as gr
+
+
+def parse_url_list_from_env(env_name: str, default_list: list[str]) -> list[str]:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return default_list
+    urls = [u.strip() for u in raw.split(",") if u.strip()]
+    return urls if urls else default_list
+
+
+PREFILL_CHOICES = parse_url_list_from_env("PREFILL_URLS", ["http://127.0.0.1:8000"])
+DECODE_CHOICES = parse_url_list_from_env("DECODE_URLS", ["http://127.0.0.1:8001"])
 
 
 def send_http_request(
@@ -280,6 +293,26 @@ def unfreeze_both_fn(p_url: str, d_url: str) -> str:
     return json.dumps({"Prefill": p_obj, "Decode": d_obj}, indent=2)
 
 
+def unfreeze_all_cluster_fn() -> str:
+    """Unfreeze all hosts listed in PREFILL_URLS and DECODE_URLS."""
+    all_results = {"Prefill_Hosts": {}, "Decode_Hosts": {}}
+    for u in PREFILL_CHOICES:
+        res = emergency_unfreeze(u)
+        try:
+            all_results["Prefill_Hosts"][u] = json.loads(res)
+        except Exception:
+            all_results["Prefill_Hosts"][u] = res
+
+    for u in DECODE_CHOICES:
+        res = emergency_unfreeze(u)
+        try:
+            all_results["Decode_Hosts"][u] = json.loads(res)
+        except Exception:
+            all_results["Decode_Hosts"][u] = res
+
+    return json.dumps(all_results, indent=2)
+
+
 # ==============================================================================
 # Gradio UI
 # ==============================================================================
@@ -288,20 +321,24 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
     gr.Markdown("# 🚀 vLLM Dev & Maintenance Operations Center")
     gr.Markdown(
         "Manage disaggregated prefill/decode instances, unfreeze deadlocks, clear KV caches, "
-        "and control engine lifecycles using vLLM dev/admin endpoints."
+        "and control engine lifecycles using vLLM dev/admin endpoints.\n\n"
+        f"💡 Loaded **{len(PREFILL_CHOICES)} Prefill URL(s)** and **{len(DECODE_CHOICES)} Decode URL(s)** "
+        "from `PREFILL_URLS` and `DECODE_URLS` environment variables."
     )
 
     with gr.Row():
-        prefill_url = gr.Textbox(
-            label="📍 Prefill Instance URL",
-            value="http://127.0.0.1:8010",
-            placeholder="http://<prefill-host>:<port>",
+        prefill_dropdown = gr.Dropdown(
+            label="📍 Prefill Instance (Select from PREFILL_URLS or type custom)",
+            choices=PREFILL_CHOICES,
+            value=PREFILL_CHOICES[0],
+            allow_custom_value=True,
             scale=1,
         )
-        decode_url = gr.Textbox(
-            label="📍 Decode Instance URL",
-            value="http://127.0.0.1:8020",
-            placeholder="http://<decode-host>:<port>",
+        decode_dropdown = gr.Dropdown(
+            label="📍 Decode Instance (Select from DECODE_URLS or type custom)",
+            choices=DECODE_CHOICES,
+            value=DECODE_CHOICES[0],
+            allow_custom_value=True,
             scale=1,
         )
 
@@ -314,42 +351,42 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
         )
         selected_url = gr.Textbox(
             label="Active Operation URL",
-            value="http://127.0.0.1:8000",
+            value=PREFILL_CHOICES[0],
             placeholder="http://<host>:<port>",
             scale=2,
         )
 
     def on_target_choice_changed(choice: str, p_url: str, d_url: str, current_sel: str) -> str:
         if choice == "Prefill":
-            return p_url
+            return p_url or PREFILL_CHOICES[0]
         elif choice == "Decode":
-            return d_url
+            return d_url or DECODE_CHOICES[0]
         else:
             return current_sel
 
-    def on_prefill_url_changed(p_url: str, choice: str) -> str:
+    def on_prefill_dropdown_changed(p_url: str, choice: str) -> str:
         if choice == "Prefill":
             return p_url
         return gr.skip()
 
-    def on_decode_url_changed(d_url: str, choice: str) -> str:
+    def on_decode_dropdown_changed(d_url: str, choice: str) -> str:
         if choice == "Decode":
             return d_url
         return gr.skip()
 
     target_choice.change(
         on_target_choice_changed,
-        inputs=[target_choice, prefill_url, decode_url, selected_url],
+        inputs=[target_choice, prefill_dropdown, decode_dropdown, selected_url],
         outputs=[selected_url],
     )
-    prefill_url.change(
-        on_prefill_url_changed,
-        inputs=[prefill_url, target_choice],
+    prefill_dropdown.change(
+        on_prefill_dropdown_changed,
+        inputs=[prefill_dropdown, target_choice],
         outputs=[selected_url],
     )
-    decode_url.change(
-        on_decode_url_changed,
-        inputs=[decode_url, target_choice],
+    decode_dropdown.change(
+        on_decode_dropdown_changed,
+        inputs=[decode_dropdown, target_choice],
         outputs=[selected_url],
     )
 
@@ -362,7 +399,8 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
             )
             with gr.Row():
                 btn_unfreeze_single = gr.Button("⚡ Emergency Unfreeze (Active Target)", variant="primary", scale=2)
-                btn_unfreeze_both = gr.Button("🔥 Full Reset Both (Prefill + Decode)", variant="stop", scale=2)
+                btn_unfreeze_both = gr.Button("🔥 Full Reset (Selected Prefill + Decode)", variant="stop", scale=2)
+                btn_unfreeze_all_cluster = gr.Button("💥 Full Reset All Hosts in Cluster", variant="stop", scale=2)
 
             gr.Markdown("### 🧹 Granular Cache & Request Reset")
             with gr.Row():
@@ -444,7 +482,8 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
 
     # --- Bindings ---
     btn_unfreeze_single.click(emergency_unfreeze, inputs=[selected_url], outputs=[output_box])
-    btn_unfreeze_both.click(unfreeze_both_fn, inputs=[prefill_url, decode_url], outputs=[output_box])
+    btn_unfreeze_both.click(unfreeze_both_fn, inputs=[prefill_dropdown, decode_dropdown], outputs=[output_box])
+    btn_unfreeze_all_cluster.click(unfreeze_all_cluster_fn, outputs=[output_box])
 
     btn_flush_cache.click(
         reset_prefix_cache_action,
