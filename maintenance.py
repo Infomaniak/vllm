@@ -172,11 +172,25 @@ def collective_rpc_action(url: str, method_name: str, args_json: str, kwargs_jso
     return json.dumps(res, indent=2)
 
 
+def unfreeze_both_fn(p_url: str, d_url: str) -> str:
+    p_res = emergency_unfreeze(p_url) if p_url.strip() else json.dumps({"status": "skipped (no Prefill URL)"})
+    d_res = emergency_unfreeze(d_url) if d_url.strip() else json.dumps({"status": "skipped (no Decode URL)"})
+    try:
+        p_obj = json.loads(p_res)
+    except Exception:
+        p_obj = p_res
+    try:
+        d_obj = json.loads(d_res)
+    except Exception:
+        d_obj = d_res
+    return json.dumps({"Prefill": p_obj, "Decode": d_obj}, indent=2)
+
+
 # ==============================================================================
 # Gradio UI
 # ==============================================================================
 
-with gr.Blocks(title="vLLM Dev & Maintenance Dashboard", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
     gr.Markdown("# 🚀 vLLM Dev & Maintenance Operations Center")
     gr.Markdown(
         "Manage disaggregated prefill/decode instances, unfreeze deadlocks, clear KV caches, "
@@ -184,29 +198,76 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard", theme=gr.themes.Soft())
     )
 
     with gr.Row():
+        prefill_url = gr.Textbox(
+            label="📍 Prefill Instance URL",
+            value="http://127.0.0.1:8000",
+            placeholder="http://<prefill-host>:<port>",
+            scale=1,
+        )
+        decode_url = gr.Textbox(
+            label="📍 Decode Instance URL",
+            value="http://127.0.0.1:8001",
+            placeholder="http://<decode-host>:<port>",
+            scale=1,
+        )
+
+    with gr.Row():
+        target_choice = gr.Radio(
+            label="🎯 Target Instance for Operations",
+            choices=["Prefill", "Decode", "Custom"],
+            value="Prefill",
+            scale=1,
+        )
         selected_url = gr.Textbox(
-            label="🎯 Target vLLM Instance URL",
+            label="Active Operation URL",
             value="http://127.0.0.1:8000",
             placeholder="http://<host>:<port>",
-            scale=3,
+            scale=2,
         )
-        with gr.Column(scale=1):
-            with gr.Row():
-                btn_set_prefill = gr.Button("📍 Prefill (8000)", size="sm")
-                btn_set_decode = gr.Button("📍 Decode (8001)", size="sm")
 
-    btn_set_prefill.click(lambda: "http://127.0.0.1:8000", outputs=selected_url)
-    btn_set_decode.click(lambda: "http://127.0.0.1:8001", outputs=selected_url)
+    def on_target_choice_changed(choice: str, p_url: str, d_url: str, current_sel: str) -> str:
+        if choice == "Prefill":
+            return p_url
+        elif choice == "Decode":
+            return d_url
+        else:
+            return current_sel
+
+    def on_prefill_url_changed(p_url: str, choice: str) -> str:
+        if choice == "Prefill":
+            return p_url
+        return gr.skip()
+
+    def on_decode_url_changed(d_url: str, choice: str) -> str:
+        if choice == "Decode":
+            return d_url
+        return gr.skip()
+
+    target_choice.change(
+        on_target_choice_changed,
+        inputs=[target_choice, prefill_url, decode_url, selected_url],
+        outputs=[selected_url],
+    )
+    prefill_url.change(
+        on_prefill_url_changed,
+        inputs=[prefill_url, target_choice],
+        outputs=[selected_url],
+    )
+    decode_url.change(
+        on_decode_url_changed,
+        inputs=[decode_url, target_choice],
+        outputs=[selected_url],
+    )
 
     with gr.Tabs():
         # --- TAB 1: EMERGENCY RECOVERY ---
         with gr.Tab("🚨 Emergency Recovery"):
             gr.Markdown(
-                "### 🔄 Recommended: Sequence Unfreeze (`/pause?mode=abort` ➔ `/reset_prefix_cache` ➔ `/resume`)\n"
+                "### 🔄 Sequence Unfreeze (`/pause?mode=abort` ➔ `/reset_prefix_cache` ➔ `/resume`)\n"
                 "Instantly clears blocked queues, resets stuck RDMA/NIXL transfers, and restores engine throughput in < 1 second."
             )
             with gr.Row():
-                btn_unfreeze_single = gr.Button("⚡ Emergency Unfreeze (Target Instance)", variant="primary", scale=2)
+                btn_unfreeze_single = gr.Button("⚡ Emergency Unfreeze (Active Target)", variant="primary", scale=2)
                 btn_unfreeze_both = gr.Button("🔥 Full Reset Both (Prefill + Decode)", variant="stop", scale=2)
 
             gr.Markdown("### 🧹 Granular Cache & Request Reset")
@@ -269,13 +330,8 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard", theme=gr.themes.Soft())
 
     # --- Bindings ---
     btn_unfreeze_single.click(emergency_unfreeze, inputs=[selected_url], outputs=[output_box])
+    btn_unfreeze_both.click(unfreeze_both_fn, inputs=[prefill_url, decode_url], outputs=[output_box])
 
-    def unfreeze_both_fn(cur_url: str):
-        p_res = emergency_unfreeze("http://127.0.0.1:8000")
-        d_res = emergency_unfreeze("http://127.0.0.1:8001")
-        return json.dumps({"Prefill": json.loads(p_res), "Decode": json.loads(d_res)}, indent=2)
-
-    btn_unfreeze_both.click(unfreeze_both_fn, inputs=[selected_url], outputs=[output_box])
     btn_flush_cache.click(
         reset_prefix_cache_action,
         inputs=[selected_url, reset_running_chk, reset_external_chk],
@@ -303,4 +359,4 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard", theme=gr.themes.Soft())
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(theme=gr.themes.Soft(), server_name="0.0.0.0", server_port=7860)
