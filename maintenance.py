@@ -63,6 +63,98 @@ def send_http_request(
 
 
 # ==============================================================================
+# Collective RPC Preset Definitions
+# ==============================================================================
+
+RPC_PRESETS = {
+    "-- Select a Preset --": {
+        "method": "",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Select a preset above to populate method, args, and kwargs automatically, or type custom values below.",
+    },
+    "1. 🩺 Worker & NCCL Health Check": {
+        "method": "check_health",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Runs an internal health check / barrier across all TP/PP worker ranks to verify no worker has crashed or hung on NCCL.",
+    },
+    "2. ⚡ Execute Dummy Forward Pass": {
+        "method": "execute_dummy_batch",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Forces all GPU workers to execute a dummy forward pass through CUDA kernels to verify GPU execution without a client request.",
+    },
+    "3. 📋 List Loaded LoRA Adapters": {
+        "method": "list_loras",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Queries all active LoRA IDs currently loaded in GPU memory across all TP ranks.",
+    },
+    "4. 🗑️ Remove / Unload LoRA Adapter": {
+        "method": "remove_lora",
+        "args": "[1]",
+        "kwargs": "{}",
+        "desc": "Unloads the specified LoRA adapter ID (e.g. ID 1) from all worker ranks to reclaim GPU memory.",
+    },
+    "5. 📌 Pin LoRA Adapter in Memory": {
+        "method": "pin_lora",
+        "args": "[1]",
+        "kwargs": "{}",
+        "desc": "Pins the specified LoRA adapter ID (e.g. ID 1) in GPU memory across workers to prevent eviction.",
+    },
+    "6. 📏 Update Max Model Context Length": {
+        "method": "update_max_model_len",
+        "args": "[8192]",
+        "kwargs": "{}",
+        "desc": "Dynamically updates the maximum context length across all workers without restarting the server.",
+    },
+    "7. ⏱️ Multi-Modal Encoder Timing Stats": {
+        "method": "get_encoder_timing_stats",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Retrieves latency and timing statistics for vision/audio multimodal encoders across workers.",
+    },
+    "8. 🔄 Hot-Reload Model Weights": {
+        "method": "reload_weights",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Hot-reloads model weights from disk or memory buffers across all worker processes without restarting.",
+    },
+    "9. 💾 Save Sharded State to Disk": {
+        "method": "save_sharded_state",
+        "args": '["/tmp/sharded_checkpoint"]',
+        "kwargs": "{}",
+        "desc": "Dumps the current in-memory sharded model weights across all TP ranks to the specified directory.",
+    },
+    "10. 🔴 Named Profiler Trace (Start)": {
+        "method": "profile",
+        "args": "[]",
+        "kwargs": '{"is_start": true, "profile_prefix": "debug_prefill_trace"}',
+        "desc": "Starts a named PyTorch/CUDA profiler trace across all distributed workers.",
+    },
+    "11. ⏹️ Named Profiler Trace (Stop)": {
+        "method": "profile",
+        "args": "[]",
+        "kwargs": '{"is_start": false}',
+        "desc": "Flushes and stops the active named profiler trace across all distributed workers.",
+    },
+    "12. 🧹 Reset Multi-Modal Cache": {
+        "method": "reset_mm_cache",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Clears the vision/audio multimodal embedding cache across all workers.",
+    },
+    "13. 🧹 Reset Encoder Cache": {
+        "method": "reset_encoder_cache",
+        "args": "[]",
+        "kwargs": "{}",
+        "desc": "Clears the encoder cache across all workers for cross-attention models.",
+    },
+}
+
+
+# ==============================================================================
 # Actions
 # ==============================================================================
 
@@ -161,13 +253,15 @@ def profile_action(url: str, action: str) -> str:
 
 
 def collective_rpc_action(url: str, method_name: str, args_json: str, kwargs_json: str) -> str:
+    if not method_name.strip():
+        return json.dumps({"error": "Method Name cannot be empty"}, indent=2)
     try:
         args = json.loads(args_json) if args_json.strip() else []
         kwargs = json.loads(kwargs_json) if kwargs_json.strip() else {}
     except Exception as e:
         return json.dumps({"error": f"JSON parse error: {e}"}, indent=2)
 
-    payload = {"method": method_name, "args": args, "kwargs": kwargs}
+    payload = {"method": method_name.strip(), "args": args, "kwargs": kwargs}
     res = send_http_request(url, "/collective_rpc", method="POST", json_body=payload)
     return json.dumps(res, indent=2)
 
@@ -200,13 +294,13 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
     with gr.Row():
         prefill_url = gr.Textbox(
             label="📍 Prefill Instance URL",
-            value="http://127.0.0.1:8000",
+            value="http://127.0.0.1:8010",
             placeholder="http://<prefill-host>:<port>",
             scale=1,
         )
         decode_url = gr.Textbox(
             label="📍 Decode Instance URL",
-            value="http://127.0.0.1:8001",
+            value="http://127.0.0.1:8020",
             placeholder="http://<decode-host>:<port>",
             scale=1,
         )
@@ -317,12 +411,32 @@ with gr.Blocks(title="vLLM Dev & Maintenance Dashboard") as demo:
                 btn_start_prof = gr.Button("🔴 Start Profiler (/start_profile)")
                 btn_stop_prof = gr.Button("⏹️ Stop Profiler (/stop_profile)")
 
-            gr.Markdown("#### Collective RPC (/collective_rpc)")
-            rpc_method = gr.Textbox(label="Method Name", placeholder="e.g. reset_prefix_cache", value="")
+            gr.Markdown("---")
+            gr.Markdown("### ⚡ Collective RPC Runner (`/collective_rpc`)")
+            gr.Markdown("Execute arbitrary worker methods simultaneously across all distributed TP/PP worker processes.")
+
+            preset_dropdown = gr.Dropdown(
+                label="📦 Quick Presets (Select a pre-configured RPC command)",
+                choices=list(RPC_PRESETS.keys()),
+                value="-- Select a Preset --",
+            )
+            preset_desc = gr.Markdown(RPC_PRESETS["-- Select a Preset --"]["desc"])
+
+            rpc_method = gr.Textbox(label="Method Name", placeholder="e.g. check_health", value="")
             with gr.Row():
                 rpc_args = gr.Textbox(label="Args (JSON Array)", placeholder="[]", value="[]")
                 rpc_kwargs = gr.Textbox(label="Kwargs (JSON Object)", placeholder="{}", value="{}")
-            btn_run_rpc = gr.Button("⚡ Execute Collective RPC")
+            btn_run_rpc = gr.Button("⚡ Execute Collective RPC", variant="primary")
+
+            def on_preset_selected(preset_key: str):
+                item = RPC_PRESETS.get(preset_key, RPC_PRESETS["-- Select a Preset --"])
+                return item["method"], item["args"], item["kwargs"], f"💡 **Details:** {item['desc']}"
+
+            preset_dropdown.change(
+                on_preset_selected,
+                inputs=[preset_dropdown],
+                outputs=[rpc_method, rpc_args, rpc_kwargs, preset_desc],
+            )
 
     # Output Console
     gr.Markdown("### 📜 Operation Response")
