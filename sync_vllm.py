@@ -217,25 +217,6 @@ def main() -> None:
         sync_fork(args.remote, args.branch)
         print()
 
-    # 2. Detect
-    sha, tag = detect_base_image(args.variant, args.remote, args.branch, args.max_walk)
-    print(f"Target Tag: {tag}")
-    print()
-
-    # 3. Update
-    if not args.no_update:
-        update_dockerfiles(args.variant, sha)
-        print()
-
-    # 4. Build / Push
-    if args.build or args.push:
-        for df in DOCKERFILES:
-            # For simplicity, we use the same tag for our images as the base image
-            image_name = f"{args.registry}:{tag}"
-            if "dev" in df:
-                image_name += "-dev"
-            docker_build_and_push(image_name, df, args.push)
-
 
 if __name__ == "__main__":
     main()
