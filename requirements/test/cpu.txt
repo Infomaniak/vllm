@@ -1259,7 +1259,7 @@ typing-inspection==0.4.2
     #   pydantic-settings
 tzdata==2024.2
     # via pandas
-urllib3==2.2.3
+urllib3==2.8.0
     # via
     #   blobfile
     #   botocore
