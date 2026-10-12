@@ -4,9 +4,9 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from math import isqrt
-import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
+import regex as re
 import torch
 import torch.nn.functional as F
 from transformers import (
@@ -17,13 +17,17 @@ from transformers import (
     AutoConfig,
     AutoModel,
     BatchFeature,
-    PretrainedConfig,
+    PreTrainedConfig,
     WavTokenizerEncoderModel,
 )
 from transformers.models.wavtokenizer import WavTokenizerFeatureExtractor
 
 from vllm.config import VllmConfig
-from vllm.config.multimodal import BaseDummyOptions
+from vllm.config.multimodal import (
+    AudioDummyOptions,
+    BaseDummyOptions,
+    ImageDummyOptions,
+)
 from vllm.distributed import get_pp_group
 from vllm.inputs import MultiModalDataDict
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
@@ -42,7 +46,9 @@ from vllm.multimodal.processing import (
     PromptUpdate,
     PromptUpdateDetails,
 )
+from vllm.multimodal.processing.processor import HFMultiModalInputs
 from vllm.sequence import IntermediateTensors
+from vllm.utils.func_utils import get_allowed_kwarg_only_overrides
 from vllm.utils.tensor_schema import TensorSchema, TensorShape
 from vllm.utils.torch_utils import set_default_torch_dtype
 
@@ -109,10 +115,10 @@ def _pad_logits_to_input_vocab(
 
 
 def _init_component_model(
-    component_config: PretrainedConfig | dict,
+    component_config: PreTrainedConfig | dict,
     model_cls: type[torch.nn.Module] | None = None,
 ) -> torch.nn.Module:
-    if isinstance(component_config, PretrainedConfig):
+    if isinstance(component_config, PreTrainedConfig):
         config_dict = component_config.to_dict()
     else:
         config_dict = dict(component_config)
@@ -223,12 +229,12 @@ class Apertus1p5DummyInputsBuilder(BaseDummyInputsBuilder[Apertus1p5ProcessingIn
                 width=max_image_side,
                 height=max_image_side,
                 num_images=mm_counts.get("image", 0),
-                overrides=image_overrides,
+                overrides=cast(ImageDummyOptions | None, image_overrides),
             ),
             "audio": self._get_dummy_audios(
                 length=feature_extractor.sampling_rate * _MAX_AUDIO_SECONDS,
                 num_audios=mm_counts.get("audio", 0),
-                overrides=audio_overrides,
+                overrides=cast(AudioDummyOptions | None, audio_overrides),
             ),
         }
 
@@ -240,28 +246,41 @@ class Apertus1p5MultiModalProcessor(BaseMultiModalProcessor[Apertus1p5Processing
         self,
         info: Apertus1p5ProcessingInfo,
         dummy_inputs: BaseDummyInputsBuilder,
-        *,
-        cache: object | None = None,
     ) -> None:
-        super().__init__(info, dummy_inputs, cache=cache)
+        super().__init__(info, dummy_inputs)
         config = info.get_hf_config()
         self.image_token_id = getattr(config, "image_token_id", _DEFAULT_IMAGE_TOKEN_ID)
         self.audio_token_id = getattr(config, "audio_token_id", _DEFAULT_AUDIO_TOKEN_ID)
 
-    def _apply_hf_processor_tokens_only(
+    def _get_hf_mm_text(self, mm_counts: Mapping[str, int]) -> str:
+        return self.dummy_inputs.get_dummy_text(mm_counts)
+
+    def _get_hf_mm_inputs(
         self,
-        prompt_tokens: list[int],
+        mm_items: MultiModalDataItems,
+        hf_kwargs: Mapping[str, object],
+    ) -> HFMultiModalInputs:
+        hf_inputs = super()._get_hf_mm_inputs(mm_items, hf_kwargs)
+        feature_extractor = self.info.get_feature_extractor(**hf_kwargs)
+        return hf_inputs._replace(
+            hf_kwargs=dict(
+                hf_inputs.hf_kwargs,
+                sampling_rate=feature_extractor.sampling_rate,
+            )
+        )
+
+    def _postprocess_prompt(
+        self,
+        prompt: list[int],
     ) -> list[int]:
         tokenizer = self.info.get_tokenizer()
         bos_token_id = tokenizer.bos_token_id
 
         # Keep raw token prompts aligned with HF's text-processing path.
-        if bos_token_id is not None and (
-            not prompt_tokens or prompt_tokens[0] != bos_token_id
-        ):
-            return [bos_token_id, *prompt_tokens]
+        if bos_token_id is not None and (not prompt or prompt[0] != bos_token_id):
+            return [bos_token_id, *prompt]
 
-        return prompt_tokens
+        return prompt
 
     def _get_mm_fields_config(
         self,
@@ -333,63 +352,54 @@ class Apertus1p5MultiModalProcessor(BaseMultiModalProcessor[Apertus1p5Processing
 
     def _call_hf_processor(
         self,
-        prompt: str,
-        mm_data: Mapping[str, object],
-        mm_kwargs: Mapping[str, object],
-        tok_kwargs: Mapping[str, object],
+        hf_data: Mapping[str, object],
+        hf_kwargs: Mapping[str, object],
     ) -> BatchFeature:
-        if not mm_data.get("images", []) and not mm_data.get("audios", []):
-            # Apertus HF rejects raw MM markers without their media. The cache's
-            # text-only pass needs those raw markers so BaseMultiModalProcessor
-            # can apply the cached PromptReplacement entries itself.
-            tokenizer = self.info.get_tokenizer()
-            prompt_ids = tokenizer.encode(
-                prompt,
-                add_special_tokens=tok_kwargs.get("add_special_tokens", True),
-            )
-            prompt_ids = self._apply_hf_processor_tokens_only(prompt_ids)
-            return BatchFeature(dict(input_ids=[prompt_ids]), tensor_type="pt")
+        hf_processor = self.info.get_hf_processor(**hf_kwargs)
+        processor_kwargs = self.info.ctx.get_merged_mm_kwargs(hf_kwargs)
+        allowed_kwargs = get_allowed_kwarg_only_overrides(
+            hf_processor,
+            processor_kwargs,
+            requires_kw_only=False,
+            allow_var_kwargs=True,
+        )
+        allowed_kwargs.setdefault("return_tensors", "pt")
 
-        item_processor_data = dict(mm_data)
-        audios = item_processor_data.pop("audios", [])
-        if audios:
-            # MultiModalDataItems uses the plural modality key; HF uses audio.
-            item_processor_data["audio"] = audios
-            feature_extractor = self.info.get_feature_extractor(**mm_kwargs)
-            mm_kwargs = dict(
-                **mm_kwargs,
-                sampling_rate=feature_extractor.sampling_rate,
-            )
-
-        processed_outputs = super()._call_hf_processor(
-            prompt=prompt,
-            mm_data=item_processor_data,
-            mm_kwargs=mm_kwargs,
-            tok_kwargs={**tok_kwargs, "padding": True},
+        # Avoid `self.info.ctx.call_hf_processor`: it casts floating multimodal
+        # outputs to the model dtype, but both tokenizer towers require FP32 inputs.
+        return hf_processor(
+            **hf_data,
+            **allowed_kwargs,
         )
 
-        if "pixel_values" in processed_outputs:
-            pixel_values = processed_outputs["pixel_values"]
-            image_sizes = processed_outputs["image_sizes"]
+    def _postprocess_hf_mm_data(
+        self,
+        hf_data: Mapping[str, object],
+        hf_kwargs: Mapping[str, object],
+        processed_data: BatchFeature,
+    ) -> BatchFeature:
+        if "pixel_values" in processed_data:
+            pixel_values = processed_data["pixel_values"]
+            image_sizes = processed_data["image_sizes"]
             assert isinstance(image_sizes, torch.Tensor)
             # Apertus1p5 input-processor pads images to a common request size.
             # Cache each image without that request-dependent padding.
-            processed_outputs["pixel_values"] = [
+            processed_data["pixel_values"] = [
                 image[:, : int(height), : int(width)].contiguous()
                 for image, (height, width) in zip(pixel_values, image_sizes)
             ]
 
-        if "input_features" in processed_outputs:
-            input_features = processed_outputs["input_features"]
-            attention_mask = processed_outputs["feature_attention_mask"]
+        if "input_features" in processed_data:
+            input_features = processed_data["input_features"]
+            attention_mask = processed_data["feature_attention_mask"]
             # Apertus1p5 input-processor pads audio to a common request size.
             # Cache each feature without that request-dependent padding.
-            processed_outputs["audio_values"] = [
+            processed_data["audio_values"] = [
                 audio[0, : int(mask.sum())].contiguous()
                 for audio, mask in zip(input_features, attention_mask)
             ]
 
-        return processed_outputs
+        return processed_data
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -456,7 +466,7 @@ class Apertus1p5ForConditionalGeneration(
                 vllm_config=vllm_config.with_hf_config(text_config),
                 prefix=maybe_prefix(prefix, "language_model"),
             )
-        self.make_empty_intermediate_tensors = (
+        self.make_empty_intermediate_tensors = (  # type: ignore[method-assign]
             self.language_model.make_empty_intermediate_tensors
         )
 
@@ -490,9 +500,6 @@ class Apertus1p5ForConditionalGeneration(
         else:
             self.lm_head = PPMissingLayer()
 
-        # A single primary source now yields the vision/audio tensors too (routed by
-        # hf_to_vllm_mapper)
-        self.secondary_weights = []
         if get_pp_group().is_first_rank:
             with set_default_torch_dtype(torch.float32):
                 with self._mark_tower_model(vllm_config, "image"):
@@ -549,14 +556,19 @@ class Apertus1p5ForConditionalGeneration(
         self,
         weights: Iterable[tuple[str, torch.Tensor]],
     ) -> set[str]:
-        skip_prefixes = ["lm_head."] if self.config.tie_word_embeddings else []
-        skip_prefixes.extend([
-            "audio_tower.backbone.",
-            "audio_tower.head.",
-            "vision_tower.decoder.",
-            "vision_tower.post_quant_conv.",
-        ])
-        loader = AutoWeightsLoader(self, skip_prefixes=skip_prefixes)
+        ignore_prefixes = ["lm_head."] if self.config.tie_word_embeddings else []
+        ignore_prefixes.extend(
+            [
+                "audio_tower.backbone.",
+                "audio_tower.head.",
+                "vision_tower.decoder.",
+                "vision_tower.post_quant_conv.",
+            ]
+        )
+        loader = AutoWeightsLoader(
+            self,
+            ignore_unexpected_prefixes=ignore_prefixes,
+        )
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
     def _get_module_device_dtype(
@@ -615,7 +627,8 @@ class Apertus1p5ForConditionalGeneration(
             audio_codes = audio_tower.encode(
                 audio.unsqueeze(0)
                 .unsqueeze(0)
-                .to(device=target_device, dtype=target_dtype)
+                .to(device=target_device, dtype=target_dtype),
+                return_dict=True,
             ).audio_codes
             ids_per_audio.append(audio_codes.squeeze(0).squeeze(0))
 

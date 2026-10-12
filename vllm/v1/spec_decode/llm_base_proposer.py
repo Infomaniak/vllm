@@ -1354,6 +1354,7 @@ class SpecDecodeBaseProposer:
             assert hasattr(target_model, "config")
             if self.get_model_name(target_model) in [
                 "BailingMoeV3VLForConditionalGeneration",
+                "Apertus1p5ForConditionalGeneration",
                 "Cohere2VisionForConditionalGeneration",
                 "Exaone4_5_ForConditionalGeneration",
                 "GlmOcrForConditionalGeneration",
